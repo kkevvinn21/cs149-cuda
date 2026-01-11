@@ -29,11 +29,10 @@ static inline int nextPow2(int n) {
 
 
 __global__ void
-upsweep_iter(int* array, int interval, int N) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < N && ((index + 1) & (interval * 2 - 1)) == 0) {
-        array[index] += array[index - interval];
-    }
+upsweep_iter(int* array, int interval) {
+    int thread_index = blockIdx.x * blockDim.x + threadIdx.x;
+    int array_index = (thread_index + 1) * (2 * interval) - 1;
+    array[array_index] += array[array_index - interval];
 }
 
 
@@ -44,13 +43,13 @@ set_to_zero(int* ptr) {
 
 
 __global__ void
-downsweep_iter(int* array, int interval, int N) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < N && ((index + 1) & (interval * 2 - 1)) == 0) {
-        int tmp = array[index - interval];
-        array[index - interval] = array[index];
-        array[index] += tmp;
-    }
+downsweep_iter(int* array, int interval) {
+    int thread_index = blockIdx.x * blockDim.x + threadIdx.x;
+    int array_index = (thread_index + 1) * (2 * interval) - 1;
+
+    int tmp = array[array_index - interval];
+    array[array_index - interval] = array[array_index];
+    array[array_index] += tmp;
 }
 
 
@@ -86,7 +85,10 @@ void exclusive_scan(int* input, int N, int* result)
 
     // upsweep phase
     for (int two_d = 1; two_d <= rounded_length/2; two_d*=2) {
-        upsweep_iter<<<num_blocks, THREADS_PER_BLOCK>>>(result, two_d, rounded_length);
+        int num_workers = rounded_length / (2 * two_d);
+        int num_blocks = (num_workers + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+        int threads_per_block = num_blocks > 1 ? THREADS_PER_BLOCK : num_workers;
+        upsweep_iter<<<num_blocks, threads_per_block>>>(result, two_d);
         cudaDeviceSynchronize();
     }
 
@@ -95,7 +97,10 @@ void exclusive_scan(int* input, int N, int* result)
 
     // downsweep phase
     for (int two_d = rounded_length/2; two_d >= 1; two_d /= 2) {
-        downsweep_iter<<<num_blocks, THREADS_PER_BLOCK>>>(result, two_d, rounded_length);
+        int num_workers = rounded_length / (2 * two_d);
+        int num_blocks = (num_workers + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+        int threads_per_block = num_blocks > 1 ? THREADS_PER_BLOCK : num_workers;
+        downsweep_iter<<<num_blocks, threads_per_block>>>(result, two_d);
         cudaDeviceSynchronize();
     }
 }
