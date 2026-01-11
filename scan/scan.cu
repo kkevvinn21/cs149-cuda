@@ -11,6 +11,8 @@
 #include <thrust/device_free.h>
 #include <type_traits>
 
+#include <iostream>
+
 #include "CycleTimer.h"
 
 #define THREADS_PER_BLOCK 256
@@ -82,7 +84,6 @@ void exclusive_scan(int* input, int N, int* result)
     // scan.
 
     int rounded_length = nextPow2(N);
-    int num_blocks = (rounded_length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     // upsweep phase
     for (int two_d = 1; two_d <= rounded_length/2; two_d*=2) {
@@ -231,28 +232,24 @@ int find_repeats(int* device_input, int length, int* device_output) {
 
     int rounded_length = nextPow2(length);
 
-    int *device_scan_input, *device_scan_output, *scan_input, *scan_output;
-    scan_input = new int[length];
-    scan_output = new int[length];
+    int *device_scan_input, *device_scan_output;
     cudaMalloc(&device_scan_input, rounded_length * sizeof(int));
     cudaMalloc(&device_scan_output, rounded_length * sizeof(int));
     
     // determine whether each index should be placed in the result array
     int num_blocks = (rounded_length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     determine_repeat<<<num_blocks, THREADS_PER_BLOCK>>>(device_input, device_scan_input, length);
-    cudaDeviceSynchronize();
     // accumulate boolean array to determine position in output
-    cudaMemcpy(scan_input, device_scan_input, length * sizeof(int), cudaMemcpyDeviceToHost);
-    exclusive_scan(scan_input, length, scan_output);
-    cudaMemcpy(device_scan_output, scan_output, length * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_scan_output, device_scan_input, length * sizeof(int), cudaMemcpyDeviceToDevice);
+    exclusive_scan(device_scan_input, length, device_scan_output);
+    // write to result array
     gather_indices<<<num_blocks, THREADS_PER_BLOCK>>>(device_scan_output, device_scan_input, device_output, length);
 
-    int result = scan_output[length-1];
-    delete [] scan_input;
-    delete [] scan_output;
+    int result;
+    cudaMemcpy(&result, device_scan_output + length - 1, sizeof(int), cudaMemcpyDeviceToHost);
     cudaFree(device_scan_input);
     cudaFree(device_scan_output);
-    return scan_output[length-1]; 
+    return result; 
 }
 
 
