@@ -27,6 +27,33 @@ static inline int nextPow2(int n) {
     return n;
 }
 
+
+__global__ void
+upsweep_iter(int* array, int interval, int N) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < N && ((index + 1) & (interval * 2 - 1)) == 0) {
+        array[index] += array[index - interval];
+    }
+}
+
+
+__global__ void
+set_to_zero(int* ptr) {
+    *ptr = 0;
+}
+
+
+__global__ void
+downsweep_iter(int* array, int interval, int N) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < N && ((index + 1) & (interval * 2 - 1)) == 0) {
+        int tmp = array[index - interval];
+        array[index - interval] = array[index];
+        array[index] += tmp;
+    }
+}
+
+
 // exclusive_scan --
 //
 // Implementation of an exclusive scan on global memory array `input`,
@@ -54,7 +81,23 @@ void exclusive_scan(int* input, int N, int* result)
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
 
+    int rounded_length = nextPow2(N);
+    int num_blocks = (rounded_length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
+    // upsweep phase
+    for (int two_d = 1; two_d <= rounded_length/2; two_d*=2) {
+        upsweep_iter<<<num_blocks, THREADS_PER_BLOCK>>>(result, two_d, rounded_length);
+        cudaDeviceSynchronize();
+    }
+
+    set_to_zero<<<1, 1>>>(result + rounded_length - 1);
+    cudaDeviceSynchronize();
+
+    // downsweep phase
+    for (int two_d = rounded_length/2; two_d >= 1; two_d /= 2) {
+        downsweep_iter<<<num_blocks, THREADS_PER_BLOCK>>>(result, two_d, rounded_length);
+        cudaDeviceSynchronize();
+    }
 }
 
 
