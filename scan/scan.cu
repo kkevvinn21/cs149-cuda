@@ -9,6 +9,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/device_malloc.h>
 #include <thrust/device_free.h>
+#include <type_traits>
 
 #include "CycleTimer.h"
 
@@ -189,6 +190,25 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
 }
 
 
+__global__ void
+determine_repeat(int* device_input, int* device_output, int N) {
+    int thread_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (thread_index < N) {
+        device_output[thread_index] = int(thread_index + 1 < N && device_input[thread_index] == device_input[thread_index+1]);
+    }
+}
+
+
+__global__ void
+gather_indices(int* device_input, int* device_input_active, int* device_output, int N) {
+    int thread_index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (thread_index < N && device_input_active[thread_index]) {
+        int output_idx = device_input[thread_index];
+        device_output[output_idx] = thread_index;
+    }
+}
+
+
 // find_repeats --
 //
 // Given an array of integers `device_input`, returns an array of all
@@ -209,7 +229,30 @@ int find_repeats(int* device_input, int length, int* device_output) {
     // must ensure that the results of find_repeats are correct given
     // the actual array length.
 
-    return 0; 
+    int rounded_length = nextPow2(length);
+
+    int *device_scan_input, *device_scan_output, *scan_input, *scan_output;
+    scan_input = new int[length];
+    scan_output = new int[length];
+    cudaMalloc(&device_scan_input, rounded_length * sizeof(int));
+    cudaMalloc(&device_scan_output, rounded_length * sizeof(int));
+    
+    // determine whether each index should be placed in the result array
+    int num_blocks = (rounded_length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    determine_repeat<<<num_blocks, THREADS_PER_BLOCK>>>(device_input, device_scan_input, length);
+    cudaDeviceSynchronize();
+    // accumulate boolean array to determine position in output
+    cudaMemcpy(scan_input, device_scan_input, length * sizeof(int), cudaMemcpyDeviceToHost);
+    exclusive_scan(scan_input, length, scan_output);
+    cudaMemcpy(device_scan_output, scan_output, length * sizeof(int), cudaMemcpyHostToDevice);
+    gather_indices<<<num_blocks, THREADS_PER_BLOCK>>>(device_scan_output, device_scan_input, device_output, length);
+
+    int result = scan_output[length-1];
+    delete [] scan_input;
+    delete [] scan_output;
+    cudaFree(device_scan_input);
+    cudaFree(device_scan_output);
+    return scan_output[length-1]; 
 }
 
 
